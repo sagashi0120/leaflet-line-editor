@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+		<title>Leaflet Line Editor</title>
+		<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+		<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+		<style>
+			* {
+				margin: 0;
+				padding: 0;
+				box-sizing: border-box;
+			}
+			body {
+				font-family: "Segoe UI",Tahoma,Geneva,Verdana,sans-serif;
+			}
+			#map {
+				height: 100vh;
+				width: 100%;
+				z-index: 1;
+			}
+			.toolbar {
+				position: absolute;
+				bottom: 15px;
+				z-index: 1000;
+				padding: 6px 6px;
+				margin: 5px;
+				border-radius: 32px;
+				box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+				display: flex;
+				gap: 4px;
+				flex-wrap: wrap;
+				pointer-events: auto;
+				backdrop-filter: blur(3px);
+				border: 1px solid rgba(255,255,255,0.3);
+			}
+			button {
+				background: #2c3e66;
+				border: none;
+				color: white;
+				padding: 6px 9px;
+				border-radius: 24px;
+				cursor: pointer;
+				font-size: 14px;
+				font-weight: bold;
+				transition: 0.2s;
+				box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+			}
+			button:hover {
+				background: #1e2b48;
+				transform: scale(0.97);
+			}
+			button:disabled {
+				background: #555;
+				opacity: 0.5; cursor: not-allowed;
+				transform: none;
+			}
+			button.danger {
+				background: #aa2e2e;
+			}
+			button.danger:hover {
+				background: #7a2222;
+			}
+			button.active {
+				background: #4c9f70;
+				outline: 2px solid #ffd966;
+			}
+			@media (max-width: 600px) {
+				button {
+					padding: 6px 12px;
+					font-size: 12px;
+				}
+				.toolbar {
+					gap: 8px;
+					padding: 10px 16px;
+				}
+			}
+			.opacity-controls {
+				position: absolute;
+				top: 10.5%;
+				right: 20px;
+				z-index: 1000;
+				background: rgba(0,0,0,0.7);
+				padding: 8px 15px;
+				border-radius: 20px;
+				color: white;
+				font-size: 12px;
+				backdrop-filter: blur(4px);
+			}
+		</style>
+	</head>
+	<body>
+		<div id="map"></div>
+		<div class="opacity-controls">
+			<span>航空写真透過率</span>
+			<input type="range" id="opacitySlider" min="0" max="100" value="50" style="width:120px;margin-left:8px;vertical-align:middle;">
+			<span id="opacityValue" style="margin-left:8px;">50%</span>
+		</div>
+		<div class="toolbar">
+			<button id="touchBtn" class="active" title="Ctrl+1">操作</button>
+			<button id="addPointBtn" title="Ctrl+2">ポイント追加</button>
+			<button id="addMidpointBtn" title="Ctrl+3" disabled>中間点追加</button>
+			<button id="deleteModeBtn" title="Ctrl+4">削除</button>
+			<button id="undoBtn" title="Ctrl+Z" disabled>↩ Undo</button>
+			<button id="redoBtn" title="Ctrl+Y | Ctrl+Shift+Z" disabled>↪ Redo</button>
+			<button id="resetBtn" title="Ctrl+Shift+R">全リセット</button>
+			<button id="fixBtn" title="Ctrl+Shift+P">全ポイント化</button>
+			<button id="importBtn" title="Ctrl+O">インポート</button>
+			<button id="exportBtn" title="Ctrl+S">エクスポート</button>
+		</div>
+		<input type="file" accept=".json" id="importFile" style="display:none;">
+		<script>
+			const map = L.map("map",{
+				center: [35.652832,139.839478],
+				zoom: 8
+			});
+			const baseMaps = {
+				"OpenStreetMap": L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+					attribution:`&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors`,
+					maxZoom: 21,
+					maxNativeZoom: 19
+				}),
+				"地理院地図": L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",{
+					attribution:`<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>`,
+					maxZoom: 21,
+					maxNativeZoom: 18
+				}),
+				"Google マップ": L.tileLayer("https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",{
+					attribution:`&copy; <a href="https://developers.google.com/maps/documentation" target="_blank">Google</a>`,
+					maxZoom: 21
+				})
+			};
+			L.control.layers(baseMaps,{}).addTo(map);
+			baseMaps["OpenStreetMap"].addTo(map);
+
+			const satelliteLayer = L.tileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",{
+				attribution:`&copy; Google`,
+				maxZoom: 21,
+				opacity: 0.5
+			});
+			satelliteLayer.addTo(map);
+			map.on("baselayerchange",() => {
+				satelliteLayer.bringToFront();
+			});
+
+			document.getElementById("opacitySlider").addEventListener("input",(e) => {
+				satelliteLayer.setOpacity(e.target.value / 100);
+				document.getElementById("opacityValue").textContent = e.target.value + "%";
+			});
+
+			L.control.scale({
+				position:"topleft",
+				imperial:false
+			}).addTo(map);
+
+			// ===================== STATE =====================
+			let points = [];
+			let midPoints = [];
+			let polylineLayer = null;
+			let pointMarkers = [];
+			let midMarkers = [];
+			let currentMode = "touch";
+			let lineClickWrapper = null;
+			let draggingMidpoint = false;
+
+			// ===================== UNDO / REDO =====================
+			const MAX_HISTORY = 50;
+			let undoStack = [];
+			let redoStack = [];
+
+			function saveState() {
+				const snapshot = {
+					points: points.map((ll) => ({
+						lat: ll.lat,
+						lng: ll.lng
+					})),
+					midPoints: midPoints.map((mp) => ({
+						id: mp.id,
+						latlng: {
+							lat: mp.latlng.lat,
+							lng: mp.latlng.lng
+						},
+						segmentIndex: mp.segmentIndex,
+						order: mp.order
+					}))
+				};
+				undoStack.push(snapshot);
+				if(undoStack.length > MAX_HISTORY) undoStack.shift();
+				redoStack = []; // 新操作でredoスタックをクリア
+				updateUndoRedoBtns();
+			}
+
+			function restoreState(snapshot) {
+				points = snapshot.points.map((c) => L.latLng(c.lat,c.lng));
+				midPoints = snapshot.midPoints.map((mp) => ({
+					id: mp.id,
+					latlng: L.latLng(mp.latlng.lat,mp.latlng.lng),
+					segmentIndex: mp.segmentIndex,
+					order: mp.order
+				}));
+			}
+
+			function undo() {
+				if(undoStack.length === 0) return;
+				// 現在の状態をredoスタックへ
+				redoStack.push(currentSnapshot());
+				const prev = undoStack.pop();
+				restoreState(prev);
+				redrawAll();
+				updateUndoRedoBtns();
+			}
+
+			function redo() {
+				if(redoStack.length === 0) return;
+				undoStack.push(currentSnapshot());
+				const next = redoStack.pop();
+				restoreState(next);
+				redrawAll();
+				updateUndoRedoBtns();
+			}
+
+			function currentSnapshot() {
+				return {
+					points: points.map((ll) => ({
+						lat: ll.lat,
+						lng: ll.lng
+					})),
+					midPoints: midPoints.map((mp) => ({
+						id: mp.id,
+						latlng: {
+							lat: mp.latlng.lat,
+							lng: mp.latlng.lng
+						},
+						segmentIndex: mp.segmentIndex,
+						order: mp.order
+					}))
+				};
+			}
+
+			function updateUndoRedoBtns() {
+				document.getElementById("undoBtn").disabled = undoStack.length === 0;
+				document.getElementById("redoBtn").disabled = redoStack.length === 0;
+			}
+
+			// ===================== DRAW =====================
+			function redrawAll() {
+				const lineCoords = buildLineCoords();
+				if(polylineLayer) map.removeLayer(polylineLayer);
+				polylineLayer = lineCoords.length >= 2 ? L.polyline(lineCoords,{
+					color:"#3388ff",
+					weight:6,
+					opacity:0.8
+				}).addTo(map) : null;
+
+				pointMarkers.forEach((m) => map.removeLayer(m));
+				pointMarkers = [];
+				points.forEach((latlng,idx) => {
+					const marker = L.marker(latlng,{
+						draggable: true,
+						icon: getMainIcon()
+					});
+					marker.on("dragstart",() => saveState());
+					marker.on("drag",(e) => {
+						points[idx] = roundLatLng(e.target.getLatLng());
+						if(polylineLayer) polylineLayer.setLatLngs(buildLineCoords());
+					});
+					marker.on("dragend",() => redrawAll());
+					marker.on("click",() => {
+						if(currentMode === "deleteMode") {
+							saveState();
+							deleteMainPoint(idx);
+						}
+					});
+					marker.addTo(map);
+					pointMarkers.push(marker);
+				});
+
+				midMarkers.forEach((m) => {
+					if(m.marker) map.removeLayer(m.marker);
+				});
+				midMarkers = [];
+				midPoints.forEach((mp,mpIdx) => {
+					const marker = L.marker(mp.latlng,{
+						draggable: true,
+						icon: getMidIcon()
+					});
+					marker.on("dragstart",() => {
+						draggingMidpoint = true;
+						saveState();
+					});
+					marker.on("drag",(e) => {
+						mp.latlng = roundLatLng(e.target.getLatLng());
+						if(polylineLayer) polylineLayer.setLatLngs(buildLineCoords());
+					});
+					marker.on("dragend",() => {
+						draggingMidpoint = false;
+						redrawAll();
+					});
+					marker.on("click",(e) => {
+						L.DomEvent.stopPropagation(e);
+						if(currentMode === "deleteMode") {
+							saveState();
+							deleteMidPoint(mpIdx);
+						}
+					});
+					marker.addTo(map);
+					midMarkers.push({
+						marker,
+						idx: mpIdx,
+						ref: mp
+					});
+				});
+				document.getElementById("addMidpointBtn").disabled = points.length < 2;
+			}
+
+			function getMainIcon() {
+				return L.divIcon({
+					className:"custom-div-icon",
+					html:`<div style="background:#e34234;width:10px;height:10px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 1px black;"></div>`,
+					iconSize:[14,14]
+				});
+			}
+			function getMidIcon() {
+				return L.divIcon({
+					className:"custom-div-icon",
+					html:`<div style="background:#3b82f6;width:10px;height:10px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 1px #333;"></div>`,
+					iconSize:[14,14]
+				});
+			}
+			function roundLatLng(ll) {
+				return L.latLng(Math.round(ll.lat * 1e6) / 1e6, Math.round(ll.lng * 1e6) / 1e6);
+			}
+
+			// ===================== LINE LOGIC =====================
+			function buildLineCoords() {
+				if(points.length === 0) return [];
+				if(points.length === 1) return [points[0]];
+				const result = [];
+				for(let i = 0; i < points.length - 1; i++) {
+					result.push(points[i]);
+					midPoints.filter((mp) => mp.segmentIndex === i).sort((a,b) => a.order - b.order).forEach(m => result.push(m.latlng));
+				}
+				result.push(points[points.length - 1]);
+				return result;
+			}
+
+			function addMidpointOnLine(latlng,segmentIndex) {
+				saveState();
+				const existingOnSegment = midPoints.filter((mp) => mp.segmentIndex === segmentIndex);
+				midPoints.push({
+					id: Date.now() + Math.random(),
+					latlng: roundLatLng(latlng),
+					segmentIndex,
+					order: existingOnSegment.length
+				});
+				rebuildMidpointOrders();
+				redrawAll();
+			}
+
+			function deleteMainPoint(index) {
+				const newMids = midPoints.filter((mp) => mp.segmentIndex !== index - 1 && mp.segmentIndex !== index);
+				points.splice(index,1);
+				for(let mp of newMids) if(mp.segmentIndex > index) mp.segmentIndex -= 1;
+				midPoints.length = 0;
+				midPoints.push(...newMids);
+				rebuildMidpointOrders();
+				redrawAll();
+			}
+
+			function deleteMidPoint(mpIdx) {
+				if(mpIdx >= 0 && mpIdx < midPoints.length) {
+					midPoints.splice(mpIdx,1);
+					rebuildMidpointOrders();
+					redrawAll();
+				}
+			}
+
+			function rebuildMidpointOrders() {
+				const groups = new Map();
+				for(let mp of midPoints) {
+					if(!groups.has(mp.segmentIndex)) groups.set(mp.segmentIndex,[]);
+					groups.get(mp.segmentIndex).push(mp);
+				}
+				for(let [seg,arr] of groups.entries()) {
+					if(seg >= 0 && seg < points.length - 1) {
+						const p1 = points[seg],p2 = points[seg + 1];
+						arr.sort((a,b) => getProjectionT(a.latlng,p1,p2) - getProjectionT(b.latlng,p1,p2));
+					}
+					arr.forEach((mp,i) => mp.order = i);
+				}
+				midPoints.sort((a,b) => a.segmentIndex - b.segmentIndex || a.order - b.order);
+			}
+
+			function getProjectionT(latlng,p1,p2) {
+				const dx = p2.lng - p1.lng,dy = p2.lat - p1.lat;
+				const len2 = dx * dx + dy * dy;
+				if(len2 === 0) return 0;
+				return Math.min(1,Math.max(0,((latlng.lng - p1.lng) * dx + (latlng.lat - p1.lat) * dy) / len2));
+			}
+
+			function nearestPointOnSegment(p,a,b) {
+				const ax = a.lng,ay = a.lat,bx = b.lng,by = b.lat,px = p.lng,py = p.lat;
+				const abx = bx - ax,aby = by - ay;
+				const t = Math.min(1,Math.max(0,((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby || 1)));
+				return L.latLng(ay + aby * t,ax + abx * t);
+			}
+
+			function findClosestSegmentPoint(clickLatLng) {
+				if(points.length < 2) {
+					return {
+						segmentIndex: -1
+					};
+				}
+				let minDist = Infinity,bestSegment = -1;
+				for(let i = 0; i < points.length-1; i++) {
+					const nearest = nearestPointOnSegment(clickLatLng,points[i],points[i+1]);
+					const cp = map.latLngToContainerPoint(clickLatLng);
+					const np = map.latLngToContainerPoint(nearest);
+					const d = Math.hypot(cp.x - np.x,cp.y - np.y);
+					if(d < minDist) {
+						minDist = d;
+						bestSegment = i;
+					}
+				}
+				return {
+					segmentIndex: bestSegment
+				};
+			}
+
+			// ===================== MODES =====================
+			function onMapClickForAddPoint(e) {
+				if(currentMode !== "addPoint") return;
+				saveState();
+				points.push(roundLatLng(e.latlng));
+				redrawAll();
+			}
+
+			function enableMidpointMode() {
+				disableLineClickHandler();
+				lineClickWrapper = e => {
+					if(currentMode !== "addMidpoint") return;
+					if(!polylineLayer) {
+						alert("最初に2点以上のラインを作成してください。");
+						return;
+					}
+					const { segmentIndex } = findClosestSegmentPoint(e.latlng);
+					if(segmentIndex !== -1) addMidpointOnLine(e.latlng,segmentIndex);
+				};
+				map.on("click",lineClickWrapper);
+			}
+
+			function disableLineClickHandler() {
+				if(lineClickWrapper) {
+					map.off("click",lineClickWrapper);
+					lineClickWrapper = null;
+				}
+			}
+
+			function setMode(mode) {
+				currentMode = mode;
+				["touchBtn","addPointBtn","addMidpointBtn","deleteModeBtn"].forEach((id) => document.getElementById(id).classList.remove("active"));
+				const modeMap = {
+					touch: "touchBtn",
+					addPoint: "addPointBtn",
+					addMidpoint: "addMidpointBtn",
+					deleteMode: "deleteModeBtn"
+				};
+				if(modeMap[mode]) document.getElementById(modeMap[mode]).classList.add("active");
+
+				map.off("click",onMapClickForAddPoint);
+				disableLineClickHandler();
+
+				if(mode === "addPoint") map.on("click",onMapClickForAddPoint);
+				else if(mode === "addMidpoint") enableMidpointMode();
+			}
+
+			// ===================== IMPORT / EXPORT =====================
+			function exportData() {
+				if(points.length === 0) return [];
+				const combined = [];
+				for(let i = 0; i < points.length-1; i++) {
+					combined.push(points[i]);
+					midPoints.filter((mp) => mp.segmentIndex === i).sort((a,b) => a.order-b.order).forEach((m) => combined.push(m.latlng));
+				}
+				combined.push(points[points.length-1]);
+				return combined;
+			}
+
+			function importData(coordArray) {
+				if(!Array.isArray(coordArray) || coordArray.length === 0) return;
+				saveState();
+				points = coordArray.map(c => L.latLng(c.lat,c.lng));
+				midPoints = [];
+				if(points.length > 0) map.fitBounds(L.latLngBounds(points));
+				rebuildMidpointOrders();
+				redrawAll();
+			}
+
+			function resetAll() {
+				if(!confirm("本当に全部消去してもよろしいですか？")) return;
+				saveState();
+				points = []; midPoints = [];
+				if(polylineLayer) map.removeLayer(polylineLayer);
+				polylineLayer = null;
+				pointMarkers.forEach((m) => map.removeLayer(m));
+				midMarkers.forEach((m) => {
+					if(m.marker) map.removeLayer(m.marker);
+				});
+				pointMarkers = [];
+				midMarkers = [];
+				redrawAll();
+			}
+
+			function exportToFile() {
+				if(points.length === 0) {
+					alert("エクスポートするラインがありません");
+					return;
+				}
+				const data = exportData();
+				const blob = new Blob([JSON.stringify({ 
+					type: "lineData",
+					version: 1.0,
+					points: data.map((ll) => ({
+						lat: ll.lat,
+						lng: ll.lng
+					})), 
+					exportedAt: new Date().toISOString()
+				},null,4)],{
+					type:"application/json"
+				});
+				const a = Object.assign(document.createElement("a"),{
+					href: URL.createObjectURL(blob),
+					download:`line_data_${Date.now()}.json`
+				});
+				document.body.appendChild(a);
+				a.click();
+				document.body.removeChild(a);
+				URL.revokeObjectURL(url);
+			}
+
+			function importFromFile(file) {
+				const reader = new FileReader();
+				reader.onload = (e) => {
+					try {
+						const json = JSON.parse(e.target.result);
+						let pts = null;
+						if(json.type === "lineData" && Array.isArray(json.points)) pts = json.points;
+						else if(Array.isArray(json)) pts = json;
+						else if(json.features?.[0]?.geometry?.coordinates) pts = json.features[0].geometry.coordinates.map((c) => ({
+							lat: c[1],
+							lng: c[0]
+						}));
+						else {
+							alert("サポートされていないファイル形式です");
+							return;
+						}
+						importData(pts);
+						alert(`インポート成功: ${pts.length}ポイント`);
+					} catch(err) {
+						alert(`ファイルの解析に失敗しました\n\n${err.message}`);
+					}
+				};
+				reader.readAsText(file);
+			}
+
+			// ===================== INIT =====================
+			// Keydown
+			document.addEventListener("keydown",(e) => {
+				if(!(e.ctrlKey || e.metaKey)) return;
+				if(e.key === "z") {
+					e.preventDefault();
+					undo();
+				}
+				if(e.key === "y" || e.key === "Z") {
+					e.preventDefault();
+					redo();
+				}
+				if(e.key === "o") {
+					e.preventDefault();
+					document.getElementById("importFile").click();
+				}
+				if(e.key === "s") {
+					e.preventDefault();
+					exportToFile();
+				}
+				if(e.key === "R") {
+					e.preventDefault();
+					resetAll();
+				}
+				if(e.key === "P") {
+					e.preventDefault();
+					importData(exportData());
+				}
+				if(e.key === "1") {
+					e.preventDefault();
+					setMode("touch");
+				}
+				if(e.key === "2") {
+					e.preventDefault();
+					setMode("addPoint");
+				}
+				if(e.key === "3") {
+					e.preventDefault();
+					setMode("addMidpoint");
+				}
+				if(e.key === "4") {
+					e.preventDefault();
+					setMode("deleteMode");
+				}
+			});
+
+			function init() {
+				document.getElementById("touchBtn").addEventListener("click",() => setMode("touch"));
+				document.getElementById("addPointBtn").addEventListener("click",() => setMode("addPoint"));
+				document.getElementById("addMidpointBtn").addEventListener("click",() => setMode("addMidpoint"));
+				document.getElementById("deleteModeBtn").addEventListener("click",() => setMode("deleteMode"));
+				document.getElementById("undoBtn").addEventListener("click",undo);
+				document.getElementById("redoBtn").addEventListener("click",redo);
+				document.getElementById("resetBtn").addEventListener("click",resetAll);
+				document.getElementById("fixBtn").addEventListener("click",() => importData(exportData()));
+				document.getElementById("exportBtn").addEventListener("click",exportToFile);
+				document.getElementById("importBtn").addEventListener("click",() => document.getElementById("importFile").click());
+				document.getElementById("importFile").addEventListener("change",(e) => {
+					if(e.target.files?.[0]) importFromFile(e.target.files[0]);
+					e.target.value = "";
+				});
+				setMode("touch");
+				redrawAll();
+				updateUndoRedoBtns();
+			}
+			init();
+		</script>
+	</body>
+</html>
