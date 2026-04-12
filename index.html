@@ -529,14 +529,14 @@
 				},null,4)],{
 					type:"application/json"
 				});
-				const a = Object.assign(document.createElement("a"),{
-					href: URL.createObjectURL(blob),
-					download:`line_data_${Date.now()}.json`
-				});
+				const a = document.createElement("a");
+				const blobUrl = URL.createObjectURL(blob);
+				a.href = blobUrl;
+				a.download = `line_data_${Date.now()}.json`;
 				document.body.appendChild(a);
 				a.click();
 				document.body.removeChild(a);
-				URL.revokeObjectURL(url);
+				URL.revokeObjectURL(blobUrl);
 			}
 
 			function importFromFile(file) {
