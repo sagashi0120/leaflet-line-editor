@@ -5,20 +5,36 @@
 		<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
 		<title>Leaflet Line Editor</title>
 		<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP&display=swap">
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">
 		<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 		<style>
 			* {
 				margin: 0;
 				padding: 0;
 				box-sizing: border-box;
-			}
-			body {
-				font-family: "Segoe UI",Tahoma,Geneva,Verdana,sans-serif;
+				font-family: "IBM Plex Sans JP","Segoe UI",Tahoma,Geneva,Verdana,sans-serif;
 			}
 			#map {
 				height: 100vh;
 				width: 100%;
 				z-index: 1;
+				transition: all 0.2s;
+			}
+			#map.drag-over::after {
+				content: "マップ上にドロップ";
+				position: absolute;
+				top: 50%;
+				left: 50%;
+				transform: translate(-50%,-50%);
+				background: rgba(255,255,255,0.8);
+				color: #000000;
+				padding: 10px 20px;
+				border-radius: 12px;
+				font-size: 18px;
+				font-weight: bold;
+				z-index: 10000;
+				pointer-events: none;
 			}
 			.toolbar {
 				position: absolute;
@@ -98,18 +114,18 @@
 			<span id="opacityValue" style="margin-left:8px;">50%</span>
 		</div>
 		<div class="toolbar">
-			<button id="touchBtn" class="active" title="Ctrl+1">操作</button>
-			<button id="addPointBtn" title="Ctrl+2">ポイント追加</button>
-			<button id="addMidpointBtn" title="Ctrl+3" disabled>中間点追加</button>
-			<button id="deleteModeBtn" title="Ctrl+4">削除</button>
-			<button id="undoBtn" title="Ctrl+Z" disabled>↩ Undo</button>
-			<button id="redoBtn" title="Ctrl+Y | Ctrl+Shift+Z" disabled>↪ Redo</button>
-			<button id="resetBtn" title="Ctrl+Shift+R">全リセット</button>
-			<button id="fixBtn" title="Ctrl+Shift+P">全ポイント化</button>
-			<button id="importBtn" title="Ctrl+O">インポート</button>
-			<button id="exportBtn" title="Ctrl+S">エクスポート</button>
+			<button id="touchBtn" class="active" title="Ctrl+1"><i class="fa-solid fa-arrow-pointer"></i> 操作</button>
+			<button id="addPointBtn" title="Ctrl+2"><i class="fa-solid fa-circle-dot"></i> ポイント追加</button>
+			<button id="addMidpointBtn" title="Ctrl+3" disabled><i class="fa-regular fa-circle-dot"></i> 中間点追加</button>
+			<button id="deleteModeBtn" title="Ctrl+4"><i class="fa-solid fa-trash-can"></i> 削除</button>
+			<button id="undoBtn" title="Ctrl+5 | Ctrl+Z" disabled><i class="fa-solid fa-rotate-left"></i> Undo</button>
+			<button id="redoBtn" title="Ctrl+6 | Ctrl+Y | Ctrl+Shift+Z" disabled><i class="fa-solid fa-rotate-right"></i> Redo</button>
+			<button id="resetBtn" title="Ctrl+7 | Ctrl+Shift+R"><i class="fa-solid fa-arrows-rotate"></i> 全リセット</button>
+			<button id="fixBtn" title="Ctrl+8 | Ctrl+Shift+P"><i class="fa-solid fa-hammer"></i> 全ポイント化</button>
+			<button id="importBtn" title="Ctrl+9 | Ctrl+O - JSON, GPX, KML"><i class="fa-solid fa-file-import"></i> インポート</button>
+			<button id="exportBtn" title="Ctrl+0 | Ctrl+S - JSON"><i class="fa-solid fa-file-export"></i> エクスポート</button>
 		</div>
-		<input type="file" accept=".json" id="importFile" style="display:none;">
+		<input type="file" accept=".json,.gpx,.kml" id="importFile" style="display:none;">
 		<script>
 			const map = L.map("map",{
 				center: [35.652832,139.839478],
@@ -479,11 +495,11 @@
 			function exportData() {
 				if(points.length === 0) return [];
 				const combined = [];
-				for(let i = 0; i < points.length-1; i++) {
+				for(let i = 0; i < points.length - 1; i++) {
 					combined.push(points[i]);
 					midPoints.filter((mp) => mp.segmentIndex === i).sort((a,b) => a.order-b.order).forEach((m) => combined.push(m.latlng));
 				}
-				combined.push(points[points.length-1]);
+				combined.push(points[points.length - 1]);
 				return combined;
 			}
 
@@ -543,18 +559,59 @@
 				const reader = new FileReader();
 				reader.onload = (e) => {
 					try {
-						const json = JSON.parse(e.target.result);
+						const content = e.target.result;
 						let pts = null;
-						if(json.type === "lineData" && Array.isArray(json.points)) pts = json.points;
-						else if(Array.isArray(json)) pts = json;
-						else if(json.features?.[0]?.geometry?.coordinates) pts = json.features[0].geometry.coordinates.map((c) => ({
-							lat: c[1],
-							lng: c[0]
-						}));
-						else {
-							alert("サポートされていないファイル形式です");
+						
+						if(file.name.endsWith(".json") || content.trim().startsWith("{")) {
+							const json = JSON.parse(content);
+							if(json.type === "lineData" && Array.isArray(json.points)) {
+								pts = json.points;
+							} else if(Array.isArray(json)) {
+								pts = json;
+							} else if(json.features?.[0]?.geometry?.coordinates) {
+								pts = json.features[0].geometry.coordinates.map((c) => ({
+									lat: c[1],
+									lng: c[0]
+								}));
+							}
+						} else if(file.name.endsWith(".gpx") || content.includes("<gpx")) {
+							const parser = new DOMParser();
+							const xmlDoc = parser.parseFromString(content,"text/xml");
+							const trkpts = xmlDoc.getElementsByTagName("trkpt");
+							
+							if(trkpts.length === 0) {
+								alert("GPXファイルにtrkpt（トラックポイント）が見つかりません");
+								return;
+							}
+							
+							pts = Array.from(trkpts).map((pt) => ({
+								lat: parseFloat(pt.getAttribute("lat")),
+								lng: parseFloat(pt.getAttribute("lon"))
+							}));
+						} else if(file.name.endsWith(".kml") || content.includes("<kml")) {
+							const parser = new DOMParser();
+							const xmlDoc = parser.parseFromString(content, "text/xml");
+							const coordinates = xmlDoc.getElementsByTagName("coordinates");
+							
+							if(coordinates.length === 0) {
+								alert("KMLファイルにcoordinatesが見つかりません");
+								return;
+							}
+							
+							const coordText = coordinates[0].textContent.trim();
+							pts = coordText.split(/\s+/).map((pair) => {
+								const [lng,lat,alt] = pair.split(",");
+								return {
+									lat: parseFloat(lat),
+									lng: parseFloat(lng)
+								};
+							});
+						} else {
+							alert("サポートされていないファイル形式です（対応: JSON, GeoJSON, GPX）");
 							return;
 						}
+						
+						if(!pts || pts.length === 0) throw new Error("ポイントが0個です");
 						importData(pts);
 						alert(`インポート成功: ${pts.length}ポイント`);
 					} catch(err) {
@@ -564,34 +621,34 @@
 				reader.readAsText(file);
 			}
 
+			const mapContainer = document.getElementById("map");
+			mapContainer.addEventListener("dragover",(e) => {
+				e.preventDefault();
+				mapContainer.classList.add("drag-over");
+			});
+			mapContainer.addEventListener("dragleave",() => {
+				mapContainer.classList.remove("drag-over");
+			});
+			mapContainer.addEventListener("drop",async(e) => {
+				e.preventDefault();
+				mapContainer.classList.remove("drag-over");
+				
+				const file = e.dataTransfer.files[0];
+				if(!file) return;
+
+				const ext = file.name.split(".").pop().toLowerCase();
+				if(!["json","gpx","kml"].includes(ext)) {
+					alert("対応ファイル: JSON, GPX, KML");
+					return;
+				}
+				
+				importFromFile(file);
+			});
+
 			// ===================== INIT =====================
 			// Keydown
 			document.addEventListener("keydown",(e) => {
 				if(!(e.ctrlKey || e.metaKey)) return;
-				if(e.key === "z") {
-					e.preventDefault();
-					undo();
-				}
-				if(e.key === "y" || e.key === "Z") {
-					e.preventDefault();
-					redo();
-				}
-				if(e.key === "o") {
-					e.preventDefault();
-					document.getElementById("importFile").click();
-				}
-				if(e.key === "s") {
-					e.preventDefault();
-					exportToFile();
-				}
-				if(e.key === "R") {
-					e.preventDefault();
-					resetAll();
-				}
-				if(e.key === "P") {
-					e.preventDefault();
-					importData(exportData());
-				}
 				if(e.key === "1") {
 					e.preventDefault();
 					setMode("touch");
@@ -607,6 +664,30 @@
 				if(e.key === "4") {
 					e.preventDefault();
 					setMode("deleteMode");
+				}
+				if(e.key === "5" || e.key === "z") {
+					e.preventDefault();
+					undo();
+				}
+				if(e.key === "6" || e.key === "y" || e.key === "Z") {
+					e.preventDefault();
+					redo();
+				}
+				if(e.key === "7" || e.key === "R") {
+					e.preventDefault();
+					resetAll();
+				}
+				if(e.key === "8" || e.key === "P") {
+					e.preventDefault();
+					importData(exportData());
+				}
+				if(e.key === "9" || e.key === "o") {
+					e.preventDefault();
+					document.getElementById("importFile").click();
+				}
+				if(e.key === "0" || e.key === "s") {
+					e.preventDefault();
+					exportToFile();
 				}
 			});
 
