@@ -124,6 +124,7 @@
 			<button id="fixBtn" title="Ctrl+8 | Ctrl+Shift+P"><i class="fa-solid fa-hammer"></i> 全ポイント化</button>
 			<button id="importBtn" title="Ctrl+9 | Ctrl+O - JSON, GPX, KML"><i class="fa-solid fa-file-import"></i> インポート</button>
 			<button id="exportBtn" title="Ctrl+0 | Ctrl+S - JSON"><i class="fa-solid fa-file-export"></i> エクスポート</button>
+			<button id="latlngBtn" title="Ctrl+L"><i class="fa-solid fa-map-pin"></i> 緯度経度から</button>
 		</div>
 		<input type="file" accept=".json,.gpx,.kml" id="importFile" style="display:none;">
 		<script>
@@ -705,6 +706,13 @@
 				document.getElementById("importFile").addEventListener("change",(e) => {
 					if(e.target.files?.[0]) importFromFile(e.target.files[0]);
 					e.target.value = "";
+				});
+				document.getElementById("latlngBtn").addEventListener("click",() => {
+					const latlng = prompt("緯度経度を入力してください").trim().split(",");
+					if(!latlng) return;
+					saveState();
+					points.push(roundLatLng(L.latLng(latlng)));
+					redrawAll();
 				});
 				setMode("touch");
 				redrawAll();
