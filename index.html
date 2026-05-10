@@ -690,6 +690,14 @@
 					e.preventDefault();
 					exportToFile();
 				}
+				if(e.key === "l") {
+					e.preventDefault();
+					const latlng = prompt("緯度経度を入力してください").trim().split(",");
+					if(!latlng) return;
+					saveState();
+					points.push(roundLatLng(L.latLng(latlng)));
+					redrawAll();
+				}
 			});
 
 			function init() {
